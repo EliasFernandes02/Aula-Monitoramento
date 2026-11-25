@@ -81,7 +81,7 @@ O projeto usa ES Modules (`import`/`export`). O caminho de uma requisição segu
 
 ## Monitoramento com Sentry
 
-O SDK é inicializado antes do Express por `src/instrument.js`, carregado pelos scripts `npm run dev` e `npm start`. Ele envia traces amostrados e registra erros. O middleware também envia logs estruturados e métricas de cada requisição.
+O SDK é inicializado antes do Express por `src/instrument.js`, carregado pelos scripts `npm run dev` e `npm start`. Ele envia traces amostrados; o middleware de erros captura exceções inesperadas e respostas 5xx como Issues. Erros esperados de cliente (4xx) não são enviados como Issues. O middleware também envia logs estruturados e métricas de cada requisição. Para entender o fluxo completo, consulte [docs/sentry-fluxo.md](./docs/sentry-fluxo.md).
 
 ### Criar o projeto e conectar a API
 
@@ -109,6 +109,30 @@ As métricas incluem método, rota e status HTTP; rotas não reconhecidas são a
 
 `SENTRY_TRACES_SAMPLE_RATE` controla a amostragem de traces; as chamadas do middleware para logs e métricas são independentes dessa taxa. Se `SENTRY_DSN` estiver vazio, a API continua funcionando localmente, mas não envia dados ao Sentry. Não publique a DSN em repositórios públicos; se ela for exposta, gere uma nova nas configurações do projeto.
 
+### Testar erros no Sentry
+
+Os testes automatizados verificam que exceções inesperadas e erros 5xx são capturados, enquanto erros esperados 4xx não viram Issues. Eles não enviam eventos externos:
+
+```powershell
+npm test
+```
+
+Para gerar um erro de teste real no Sentry, confirme que `SENTRY_DSN` está preenchida no `.env` e execute:
+
+```powershell
+npm run sentry:test-error
+```
+
+O comando sobe uma instância temporária da API, simula uma falha interna que resulta em HTTP 500 e aguarda o SDK enviar o evento. Ele não usa o banco Neon nem cria usuários ou pagamentos. A saída esperada confirma `Erro HTTP 500 simulado e enviado ao Sentry` e mostra o ambiente usado.
+
+Para localizar o evento no Sentry:
+
+1. Abra **Explore → Errors** e selecione o projeto da API, por exemplo `node-express`.
+2. Selecione o ambiente configurado em `SENTRY_ENVIRONMENT` (localmente, normalmente `development`) e um intervalo que inclua os últimos minutos.
+3. Limpe filtros anteriores e procure por `falha intencional`.
+
+O evento pode levar alguns instantes para aparecer. Executar o comando novamente envia outro evento, que pode ser agrupado no mesmo Issue.
+
 ### Problemas comuns
 
 - **A aplicação encerra ao iniciar:** confirme que `JWT_SECRET` está definido e possui pelo menos 32 caracteres.
@@ -127,6 +151,41 @@ As métricas incluem método, rota e status HTTP; rotas não reconhecidas são a
 | `POST` | `/api/payments` | JWT | Cria pagamento simulado |
 
 O token deve ser enviado no cabeçalho `Authorization: Bearer <token>`. Nas rotas privadas, o middleware valida o JWT e confirma que o usuário ainda existe no banco; o usuário autenticado fica disponível em `req.user`. Valores são números positivos e a moeda usa três letras maiúsculas, por exemplo `BRL`.
+
+## Teste de volume para criação de pagamentos
+
+O script `scripts/load-test-payments.js` cria um usuário temporário, autentica e envia requisições concorrentes para `POST /api/payments`. Ele usa somente Node.js, sem dependências extras. Cada execução grava um usuário e os pagamentos no banco; esses registros não são removidos automaticamente. Use um banco Neon de teste, nunca um banco com dados importantes.
+
+Com a API em execução (`npm run dev`), confira a configuração sem enviar requisições:
+
+```powershell
+npm run load:payments -- --dry-run
+```
+
+Por padrão, a execução cria 100 pagamentos com até 5 requisições simultâneas. Para executar, confirme explicitamente a gravação:
+
+```powershell
+npm run load:payments -- --confirm-write
+```
+
+É possível ajustar o teste na sessão atual do PowerShell. O limite é 1.000 pagamentos por execução e concorrência máxima de 10:
+
+```powershell
+$env:LOAD_TEST_REQUESTS = "200"
+$env:LOAD_TEST_CONCURRENCY = "5"
+npm run load:payments -- --confirm-write
+```
+
+O destino padrão é `http://localhost:3000`. Para uma API remota, configure a URL HTTPS e habilite o destino remoto somente se a API for sua ou você tiver autorização:
+
+```powershell
+$env:LOAD_TEST_BASE_URL = "https://sua-api.example.com"
+$env:LOAD_TEST_ALLOW_REMOTE = "true"
+npm run load:payments -- --dry-run
+npm run load:payments -- --confirm-write
+```
+
+O resumo apresenta sucesso, falhas, vazão e latências média e p95. A criação do usuário e o login também geram requisições da API e aparecem nas métricas/logs do Sentry; as estatísticas do script medem somente as tentativas de criação de pagamentos.
 
 ## Exemplo de uso
 

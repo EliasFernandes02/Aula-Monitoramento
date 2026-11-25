@@ -12,6 +12,8 @@
     "migrate:dev": "prisma migrate dev",
     "db:generate": "prisma generate",
     "postinstall": "prisma generate",
+    "load:payments": "node scripts/load-test-payments.js",
+    "sentry:test-error": "node scripts/sentry-error-demo.js",
     "test": "node --test"
   },
   "engines": {
